@@ -1,191 +1,58 @@
-# LumenPulse
+## Summary
 
-LumenPulse is a cutting-edge, decentralized crypto news aggregator and portfolio management platform built on the Stellar blockchain ecosystem. Leveraging Stellar's sub-second settlements, low fees, and Soroban smart contracts, LumenPulse curates real-time news from trusted sources, enables seamless portfolio tracking, and rewards community contributions with on-chain incentives—empowering users with transparent, borderless access to crypto insights.
+Builds a nightly snapshot pipeline that captures contributor reputation scores from the Stellar testnet `contributor_registry` contract and exposes a ranked leaderboard via REST API. Snapshots are pre-aggregated so leaderboard queries never hit the chain at request time.
 
-Designed for crypto enthusiasts, traders, and developers worldwide, LumenPulse simplifies staying informed and managing assets in volatile markets. Whether you're a novice investor monitoring trends or a DeFi power user analyzing on-chain data, the platform's intuitive UI, robust API, and blockchain integration foster informed decisions and community-driven content, all while promoting financial inclusion through Stellar's efficient infrastructure.
+## Changes
 
-## Features
-### Core
-- **Futuristic UI/UX**: Sleek, responsive design with animated components and interactive dashboards.
-- **Stellar Wallet Integration**: Seamless connections via Freighter or Lobstr for secure auth and transactions.
-- **News Aggregation Dashboard**: Real-time curation from multiple sources with sentiment analysis.
-- **Portfolio Visualization**: Dynamic charts for asset tracking, performance metrics, and risk assessment.
+### New module — `apps/backend/src/contributor-snapshots/`
 
-### Advanced
-- **Transaction History**: Detailed on-chain views with Stellar explorer links.
-- **Community Engagement**: Rating, commenting, and rewarded content submissions via Soroban contracts.
-- **RESTful API**: Scalable backend for data queries and integrations.
-- **Intelligent Data Processing**: Automated analytics for market trends and portfolio optimization.
+| File | Description |
+|------|-------------|
+| `entities/contributor-snapshot.entity.ts` | TypeORM entity for `contributor_snapshots` table. One row per `(snapshot_date, contributor_address)` with a unique constraint for idempotent upserts. |
+| `dto/contributor-snapshot.dto.ts` | Interfaces for aggregation rows, leaderboard query params, response entries, and run results. |
+| `contributor-snapshot.repository.ts` | Reads from `stellar_contributor_registry` (populated by the existing `StellarSyncProcessor`), deduplicates to the latest row per contributor, assigns ranks by descending score, and serves top-N leaderboard queries. |
+| `contributor-snapshot.generator.ts` | Orchestrates aggregate → upsert. Exposes `generateForDate`, `generateForYesterday`, and `backfill(from, to)`. |
+| `contributor-snapshot.scheduler.ts` | `@Cron('5 1 * * *')` — fires at **01:05 UTC** nightly, 5 min after the existing sentiment snapshot job. |
+| `contributor-snapshot.controller.ts` | `GET /contributor-snapshots/leaderboard?limit=N&date=YYYY-MM-DD` |
+| `contributor-snapshots.module.ts` | NestJS module. |
+| `contributor-snapshot.generator.spec.ts` | 13 unit tests covering normal flow, UTC normalisation, empty data, error propagation, null fields, and backfill edge cases. |
 
-## Local Development
+### Modified
 
-For a step-by-step guide to running the complete LumenPulse stack locally—including wallet setup, Soroban tooling, environment variables, seeded data, and service startup order—see **[document/LOCAL_SETUP.md](document/LOCAL_SETUP.md)**.
+- `apps/backend/src/app.module.ts` — imports `ContributorSnapshotsModule`
 
-## Migration Notes
+### Documentation
 
-LumenPulse has migrated to Stellar/Soroban architecture. For details on changes from prior chain assumptions, completed migrations, and legacy cleanup, see [Stellar Migration Notes](document/STELLAR_MIGRATION_NOTES.md).
+- `document/CONTRIBUTOR_SNAPSHOTS.md` — snapshot schedule, API reference, DB schema, and backfill instructions
 
-## Tech Stack
-### Frontend
-- Next.js 15: App router, server components, and streaming.
-- React 18: Component-based UI.
-- TypeScript: Type-safe development.
-- Tailwind CSS: Utility-first styling.
-- Zustand: Lightweight state management.
-- Stellar SDK: Blockchain interactions.
-- Lucide: Icon library.
-- Recharts: Charting visuals.
+## Acceptance Criteria
 
-### Backend API
-- Node.js: Runtime.
-- Express.js 4.18.2: Web framework.
-- RESTful design with CORS and error handling.
-- Nodemon 3.0.1: Hot reload.
+- [x] **Snapshot schedule documented** — `5 1 * * *` (01:05 UTC) in scheduler and docs
+- [x] **Supports top-N queries** — `findTopN(limit, date?)` capped at 100, exposed via `GET /contributor-snapshots/leaderboard`
+- [x] **Works from testnet data** — reads from `stellar_contributor_registry` populated by `StellarSyncProcessor` polling the Stellar testnet Horizon API
 
-### Data Processing
-- Python 3.9+: Core language.
-- Libraries for crypto/news aggregation and analytics.
-- Stellar integration for on-chain data.
-
-### Blockchain
-- Stellar Blockchain: Core network for transactions and rewards.
-- Soroban: Rust smart contracts for content incentives and data verification.
-- Stellar SDK (JS): Client-side queries and tx building.
-
-### Monorepo
-- pnpm workspaces with TurboRepo for unified builds.
-
-## Repository Structure
-LumenPulse is a monorepo for streamlined development across web, API, data, and blockchain layers. The structure supports independent module scaling while sharing utilities like auth and Stellar helpers.
+## API
 
 ```
-lumenpulse/
-├── apps/
-│   ├── frontend/              # Next.js UI (dashboards, news feeds)
-│   ├── backend-api/           # Express.js REST API (data endpoints)
-│   └── data-processing/       # Python scripts (aggregation, analytics)
-├── packages/
-│   ├── ui/                    # Shared React components/icons
-│   └── stellar-sdk/           # Stellar/Soroban wrappers (tx utils, contract calls)
-├── soroban-contracts/         # Rust Soroban contracts (rewards, content verification)
-│   ├── src/
-│   │   ├── lib.rs             # Core logic (e.g., reward minting)
-│   │   └── test.rs            # Unit tests
-│   └── Cargo.toml             # Dependencies (soroban-sdk)
-├── .pnpm-workspace.yaml       # pnpm config
-├── turbo.json                 # Build pipelines
-└── .env.example               # Env template
+GET /contributor-snapshots/leaderboard?limit=10&date=2026-05-25
 ```
 
-For module-specific docs: [FRONTEND.md](FRONTEND.md), [BACKEND.md](BACKEND.md), [DATA-PROCESSING.md](DATA-PROCESSING.md), [SOROBAN.md](SOROBAN.md).
+```json
+[
+  { "rank": 1, "contributorAddress": "GABC...XYZ", "githubHandle": "alice", "reputationScore": 9500, "snapshotDate": "2026-05-25" },
+  { "rank": 2, "contributorAddress": "GDEF...UVW", "githubHandle": "bob",   "reputationScore": 8200, "snapshotDate": "2026-05-25" }
+]
+```
 
-## Setup Instructions
+## Testing
 
-### Prerequisites
-- Node.js 18+ ([nodejs.org](https://nodejs.org)).
-- pnpm (install: `npm install -g pnpm`).
-- Python 3.9+ ([python.org](https://python.org)).
-- Rust 1.75+ (for Soroban; [rustup.rs](https://rustup.rs); add WASM target: `rustup target add wasm32-unknown-unknown`).
-- Stellar testnet wallet (Freighter; [freighter.app](https://freighter.app)).
-- Git and pip.
+- 13 unit tests in `contributor-snapshot.generator.spec.ts`
+- TypeScript type-check passes with no errors in new files (`tsc --noEmit`)
 
-### Installation
-1. Clone the repository:
-   ```
-   git clone https://github.com/Pulsefy/Lumenpulse.git
-   cd Lumenpulse
-   ```
+## Notes
 
-2. Install dependencies:
-   ```
-   pnpm install
-   cd soroban-contracts && cargo build --target wasm32-unknown-unknown --release && cd ..
-   cd data-processing && pip install -r requirements.txt && cd ..
-   ```
+- The upsert on `(snapshot_date, contributor_address)` makes the job safe to re-run for the same date.
+- Backfill is available via `ContributorSnapshotGenerator.backfill(from, to)` for one-off historical runs.
+- No breaking changes to existing modules.
 
-### Environment Setup
-1. Copy `.env.example` to `.env` (root) and configure:
-   ```
-   NODE_ENV=development
-   PORT=3000
-   DB_HOST=localhost
-   DB_PORT=5432
-   DB_USER=your_user
-   DB_PASS=your_pass
-   API_KEY=your_external_api_key
-   STELLAR_NETWORK=testnet  # "mainnet" for production
-   WALLET_SECRET=your_stellar_secret  # Base64 for dev txs
-   SOROBAN_RPC_URL=http://localhost:8000/soroban/rpc  # Local RPC
-   ```
-2. Database: Set up PostgreSQL (e.g., via Docker) and run migrations in `backend-api`: `npx prisma migrate dev` (if using Prisma).
-3. Stellar: Fund testnet wallet at [laboratory.stellar.org](https://laboratory.stellar.org).
-4. Soroban: Install CLI (`cargo install --git https://github.com/stellar/rs-soroban-cli soroban-cli`).
-
-### Running Locally
-1. Start Soroban RPC (for contracts):
-   ```
-   soroban rpc serve --network testnet --port 8000
-   ```
-2. Launch with TurboRepo:
-   ```
-   pnpm turbo run dev
-   ```
-   - Frontend: [http://localhost:3000](http://localhost:3000).
-   - Backend: [http://localhost:8000](http://localhost:8000).
-   - Data Processing: Runs as background script (invoke via API).
-3. Deploy/deploy test contract:
-   ```
-   cd soroban-contracts
-   soroban contract deploy --wasm target/wasm32-unknown-unknown/release/lumenpulse.wasm --network testnet
-   ```
-4. Connect wallet in frontend to test news/portfolio features.
-
-### Testing
-1. Lint/type-check:
-   ```
-   pnpm turbo run lint
-   ```
-2. Unit tests:
-   ```
-   pnpm turbo run test  # JS/TS (Jest)
-   cd soroban-contracts && cargo test  # Rust
-   cd data-processing && pytest  # Python
-   ```
-3. E2E:
-   ```
-   pnpm turbo run test:e2e  # Playwright for frontend
-   ```
-   Tests require testnet; mocks for external APIs.
-
-### Deployment
-- **Frontend**: Vercel—connect repo, add env vars.
-- **Backend/Data**: Railway or AWS; containerize Python scripts.
-- **Soroban Contracts**: Deploy via CI/CD (GitHub Actions); verify on Stellar explorer.
-- Production: Set `STELLAR_NETWORK=mainnet`; audit contracts.
-
-## Usage
-1. **News Feed**: Browse aggregated articles; rate/comment for rewards.
-2. **Portfolio**: Connect wallet → add assets → view charts/transactions.
-3. **Contribute**: Submit insights; earn via Soroban reward contract.
-4. **API**: Query endpoints like `/api/news` or `/api/portfolio`.
-
-## Contributing
-We welcome contributions to evolve LumenPulse! See [CONTRIBUTING.md](CONTRIBUTING.md) for details:
-- **Issues**: Report bugs/features with repro steps.
-- **PRs**:
-  1. Fork/branch: `git checkout -b feat/your-feature`.
-  2. Code/test/lint.
-  3. Commit: "feat: add Soroban reward minting".
-  4. PR to `main`.
-- Monorepo tips: Use `pnpm turbo run build --filter=...` for targeted builds.
-- Guidelines: Follow conventions, add tests, update docs. Adhere to [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## License
-MIT License. See [LICENSE](LICENSE).
-
-
-## Support & Community
-- Join the [Lumenpulse Discord](https://discord.gg/gBmApTNVV) for real-time help, discussions, and updates.
-- Have questions? Open an issue or DM @pulsefy.
-
-Built with ❤️ by the LumenPulse Team. Powered by Stellar. 🚀
+closes #744
